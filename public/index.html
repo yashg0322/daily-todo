@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Daily Todo — structured daily planner for focus, growth, and reflection" />
+  <title>Daily Todo — Life Planner</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="authScreen" class="auth-screen">
+    <div class="auth-bg" aria-hidden="true">
+      <div class="auth-orb auth-orb-1"></div>
+      <div class="auth-orb auth-orb-2"></div>
+      <div class="auth-orb auth-orb-3"></div>
+    </div>
+
+    <div class="auth-layout">
+      <aside class="auth-hero">
+        <div class="auth-hero-inner">
+          <div class="auth-logo">
+            <span class="auth-logo-mark" aria-hidden="true">◆</span>
+            <span class="auth-logo-text">Daily Planner</span>
+          </div>
+          <h1 class="auth-headline">Plan your day.<br />Reflect at night.</h1>
+          <p class="auth-lead">A personal workspace for priorities, time blocks, quick wins, learning, and end-of-day reflection.</p>
+
+          <ul class="auth-features">
+            <li>
+              <span class="auth-feature-icon" style="--feat-color: var(--sec-top3)">◆</span>
+              <div>
+                <strong>Top 3 priorities</strong>
+                <span>Focus on what matters most</span>
+              </div>
+            </li>
+            <li>
+              <span class="auth-feature-icon" style="--feat-color: var(--sec-scheduled)">◷</span>
+              <div>
+                <strong>Scheduled blocks</strong>
+                <span>Time-box meetings &amp; deep work</span>
+              </div>
+            </li>
+            <li>
+              <span class="auth-feature-icon" style="--feat-color: var(--sec-reflection)">✦</span>
+              <div>
+                <strong>Daily reflection</strong>
+                <span>Track mood, wins &amp; lessons</span>
+              </div>
+            </li>
+          </ul>
+
+          <p class="auth-footnote">Your data is private to your account — always.</p>
+        </div>
+      </aside>
+
+      <main class="auth-panel">
+        <div class="auth-panel-top">
+          <button type="button" class="icon-btn auth-theme-btn" id="authThemeToggle" aria-label="Toggle theme">
+            <span class="icon-sun" aria-hidden="true">☀</span>
+            <span class="icon-moon" aria-hidden="true">☾</span>
+          </button>
+        </div>
+
+        <div class="auth-card">
+          <header class="auth-card-header">
+            <h2 id="authFormTitle">Welcome back</h2>
+            <p id="authFormSubtitle">Sign in to continue to your planner</p>
+          </header>
+
+          <div class="auth-tabs" role="tablist">
+            <button type="button" class="auth-tab active" data-auth-tab="login" role="tab">Sign in</button>
+            <button type="button" class="auth-tab" data-auth-tab="register" role="tab">Create account</button>
+          </div>
+
+          <form id="loginForm" class="auth-form">
+            <label class="input-group">
+              <span class="input-label">Email</span>
+              <div class="input-wrap">
+                <span class="input-icon" aria-hidden="true">@</span>
+                <input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="email" required />
+              </div>
+            </label>
+            <label class="input-group">
+              <span class="input-label">Password</span>
+              <div class="input-wrap">
+                <span class="input-icon" aria-hidden="true">●</span>
+                <input type="password" id="loginPassword" autocomplete="current-password" required minlength="6" placeholder="••••••••" />
+                <button type="button" class="input-toggle pw-toggle" data-target="loginPassword" aria-label="Show password">👁</button>
+              </div>
+            </label>
+            <button type="submit" class="btn btn-auth btn-full" id="loginSubmit">
+              <span class="btn-text">Sign in</span>
+              <span class="btn-spinner" hidden></span>
+            </button>
+          </form>
+
+          <form id="registerForm" class="auth-form" hidden>
+            <label class="input-group">
+              <span class="input-label">Full name</span>
+              <div class="input-wrap">
+                <span class="input-icon" aria-hidden="true">◦</span>
+                <input type="text" id="registerName" placeholder="Your name" autocomplete="name" required maxlength="80" />
+              </div>
+            </label>
+            <label class="input-group">
+              <span class="input-label">Email</span>
+              <div class="input-wrap">
+                <span class="input-icon" aria-hidden="true">@</span>
+                <input type="email" id="registerEmail" placeholder="you@example.com" autocomplete="email" required />
+              </div>
+            </label>
+            <label class="input-group">
+              <span class="input-label">Password</span>
+              <div class="input-wrap">
+                <span class="input-icon" aria-hidden="true">●</span>
+                <input type="password" id="registerPassword" autocomplete="new-password" required minlength="6" placeholder="At least 6 characters" />
+                <button type="button" class="input-toggle pw-toggle" data-target="registerPassword" aria-label="Show password">👁</button>
+              </div>
+            </label>
+            <button type="submit" class="btn btn-auth btn-full" id="registerSubmit">
+              <span class="btn-text">Create account</span>
+              <span class="btn-spinner" hidden></span>
+            </button>
+          </form>
+
+          <p class="auth-error" id="authError" hidden></p>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="appRoot" class="app" hidden>
+    <header class="header">
+      <div class="header-row">
+        <div>
+          <p class="greeting" id="greeting"></p>
+          <h1>Daily Planner</h1>
+          <p class="subtitle" id="dateDisplay"></p>
+        </div>
+        <div class="header-actions">
+          <span class="user-chip" id="userChip" title="Signed in"></span>
+          <button type="button" class="icon-btn" id="themeToggle" aria-label="Toggle theme" title="Toggle theme (T)">
+            <span class="icon-sun" aria-hidden="true">☀</span>
+            <span class="icon-moon" aria-hidden="true">☾</span>
+          </button>
+          <div class="menu-wrap">
+            <button type="button" class="icon-btn" id="menuBtn" aria-label="More options" aria-expanded="false">⋯</button>
+            <div class="dropdown" id="dropdown" hidden>
+              <button type="button" id="exportBtn">Export backup</button>
+              <button type="button" id="importBtn">Import backup</button>
+              <button type="button" id="logoutBtn">Sign out</button>
+              <input type="file" id="importFile" accept=".json" hidden />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-stats">
+        <div class="progress-card">
+          <div class="progress-ring-wrap">
+            <svg class="progress-ring" viewBox="0 0 36 36" aria-hidden="true">
+              <circle class="progress-ring-bg" cx="18" cy="18" r="15.5" />
+              <circle class="progress-ring-fill" id="progressRing" cx="18" cy="18" r="15.5" />
+            </svg>
+            <span class="progress-percent" id="progressPercent">0%</span>
+          </div>
+          <div class="progress-details">
+            <p class="progress-label">Today's progress</p>
+            <div class="stat-chips">
+              <span class="chip chip-active" id="activeCount">0 active</span>
+              <span class="chip chip-done" id="doneCount">0 done</span>
+              <span class="chip chip-focus" id="focusCount">Top 3: 0/3</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="intention-card card">
+          <label for="dailyIntention" class="intention-label">Today's intention</label>
+          <input type="text" id="dailyIntention" maxlength="120" placeholder="One sentence — what will make today a win?" />
+        </div>
+      </div>
+    </header>
+
+    <nav class="view-tabs" role="tablist" aria-label="App views">
+      <button type="button" class="view-tab active" data-view="dashboard" role="tab" aria-selected="true">Dashboard</button>
+      <button type="button" class="view-tab" data-view="all" role="tab" aria-selected="false">All Tasks</button>
+    </nav>
+
+    <!-- Dashboard View -->
+    <div id="dashboardView" class="view-panel">
+      <div class="sections-grid" id="sectionsGrid"></div>
+
+      <section class="reflection-card card" aria-labelledby="reflectionTitle">
+        <header class="reflection-header">
+          <div>
+            <h2 id="reflectionTitle">End-of-day reflection</h2>
+            <p class="section-desc">Capture wins, lessons, and how the day felt</p>
+          </div>
+          <span class="reflection-streak" id="reflectionStreak" title="Reflection streak"></span>
+        </header>
+
+        <div class="mood-picker" role="group" aria-label="How was your day?">
+          <span class="field-label">Mood</span>
+          <div class="mood-options" id="moodPicker"></div>
+        </div>
+
+        <div class="reflection-fields">
+          <label class="field">
+            <span>What went well</span>
+            <textarea id="reflectWentWell" rows="2" maxlength="400" placeholder="e.g. Backend mismatch resolved"></textarea>
+          </label>
+          <label class="field">
+            <span>What to improve tomorrow</span>
+            <textarea id="reflectImprove" rows="2" maxlength="400" placeholder="e.g. Start deep work before checking email"></textarea>
+          </label>
+          <label class="field">
+            <span>Notes &amp; thoughts</span>
+            <textarea id="reflectNotes" rows="3" maxlength="600" placeholder="Free-form end-of-day review…"></textarea>
+          </label>
+        </div>
+
+        <div class="reflection-footer">
+          <span class="save-hint" id="reflectSaveHint">Auto-saves as you type</span>
+          <details class="past-reflections">
+            <summary>Previous reflections</summary>
+            <ul id="pastReflections" class="past-list"></ul>
+          </details>
+        </div>
+      </section>
+    </div>
+
+    <!-- All Tasks View -->
+    <div id="allTasksView" class="view-panel" hidden>
+      <section class="toolbar">
+        <div class="search-wrap">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input type="search" id="searchInput" placeholder="Search tasks…" autocomplete="off" aria-label="Search tasks" />
+          <kbd class="hint" aria-hidden="true">/</kbd>
+        </div>
+      </section>
+
+      <form class="add-form card" id="addForm">
+        <input type="text" id="taskInput" placeholder="What needs to get done?" autocomplete="off" maxlength="200" required />
+        <div class="add-form-row">
+          <select id="sectionInput" aria-label="Section">
+            <option value="top3">Top 3 Priorities</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="quickwin">Quick Wins</option>
+            <option value="learning">Learning Goals</option>
+            <option value="inbox">Inbox</option>
+          </select>
+          <input type="date" id="dueDateInput" aria-label="Due date" />
+          <input type="time" id="startTimeInput" aria-label="Start time" class="time-field" hidden />
+          <input type="time" id="endTimeInput" aria-label="End time" class="time-field" hidden />
+          <select id="priorityInput" aria-label="Priority">
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="low">Low</option>
+          </select>
+          <select id="categoryInput" aria-label="Category">
+            <option value="personal">Personal</option>
+            <option value="work">Work</option>
+            <option value="health">Health</option>
+            <option value="shopping">Shopping</option>
+            <option value="other">Other</option>
+          </select>
+          <button type="submit" class="btn btn-primary">Add task</button>
+        </div>
+      </form>
+
+      <div class="controls">
+        <nav class="filters" role="tablist" aria-label="Filter tasks">
+          <button type="button" class="filter-btn" data-filter="today">Today</button>
+          <button type="button" class="filter-btn" data-filter="overdue">Overdue</button>
+          <button type="button" class="filter-btn active" data-filter="all">All</button>
+          <button type="button" class="filter-btn" data-filter="active">Active</button>
+          <button type="button" class="filter-btn" data-filter="completed">Done</button>
+        </nav>
+        <select id="sortSelect" class="sort-select" aria-label="Sort tasks">
+          <option value="smart">Smart sort</option>
+          <option value="priority">Priority</option>
+          <option value="due">Due date</option>
+          <option value="created">Newest</option>
+          <option value="alpha">A → Z</option>
+        </select>
+      </div>
+
+      <div class="category-bar" id="categoryBar" aria-label="Filter by category"></div>
+      <ul class="task-list" id="taskList" aria-live="polite"></ul>
+
+      <footer class="footer" id="footer" hidden>
+        <button type="button" class="btn btn-ghost" id="clearCompleted">Clear completed</button>
+      </footer>
+
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon" aria-hidden="true">✓</div>
+        <p class="empty-title">All clear!</p>
+        <p class="empty-text">No tasks yet. Add something above to get started.</p>
+      </div>
+    </div>
+  </div>
+
+  <dialog class="modal" id="editModal" aria-labelledby="editModalTitle">
+    <form id="editForm" method="dialog">
+      <header class="modal-header">
+        <h2 id="editModalTitle">Edit task</h2>
+        <button type="button" class="icon-btn modal-close" id="editClose" aria-label="Close">×</button>
+      </header>
+      <div class="modal-body">
+        <label class="field">
+          <span>Task</span>
+          <input type="text" id="editText" maxlength="200" required />
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Section</span>
+            <select id="editSection">
+              <option value="top3">Top 3 Priorities</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="quickwin">Quick Wins</option>
+              <option value="learning">Learning Goals</option>
+              <option value="inbox">Inbox</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Due date</span>
+            <input type="date" id="editDueDate" />
+          </label>
+        </div>
+        <div class="field-row time-row" id="editTimeRow" hidden>
+          <label class="field">
+            <span>Start time</span>
+            <input type="time" id="editStartTime" />
+          </label>
+          <label class="field">
+            <span>End time</span>
+            <input type="time" id="editEndTime" />
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span>Priority</span>
+            <select id="editPriority">
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Category</span>
+            <select id="editCategory">
+              <option value="personal">Personal</option>
+              <option value="work">Work</option>
+              <option value="health">Health</option>
+              <option value="shopping">Shopping</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+        </div>
+        <label class="field" id="editResourceField" hidden>
+          <span>Resource link</span>
+          <input type="url" id="editResource" placeholder="https://…" />
+        </label>
+        <label class="field">
+          <span>Notes</span>
+          <textarea id="editNotes" rows="3" maxlength="500" placeholder="Optional details…"></textarea>
+        </label>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn btn-danger" id="editDelete">Delete</button>
+        <button type="submit" class="btn btn-primary">Save changes</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <span id="toastMessage"></span>
+    <button type="button" class="toast-action" id="toastAction" hidden>Undo</button>
+  </div>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
