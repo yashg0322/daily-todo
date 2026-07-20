@@ -2,9 +2,16 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Daily Todo — structured daily planner for focus, growth, and reflection" />
-  <title>Daily Todo — Life Planner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Daily Planner — Top 3 priorities, schedule, quick wins, learning, and reflection" />
+  <meta name="theme-color" content="#5b9fd4" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Daily Planner" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <title>Daily Planner</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -141,6 +148,7 @@
           <p class="subtitle" id="dateDisplay"></p>
         </div>
         <div class="header-actions">
+          <button type="button" class="btn btn-install" id="installBtn" hidden>Install app</button>
           <span class="user-chip" id="userChip" title="Signed in"></span>
           <button type="button" class="icon-btn" id="themeToggle" aria-label="Toggle theme" title="Toggle theme (T)">
             <span class="icon-sun" aria-hidden="true">☀</span>
@@ -187,10 +195,36 @@
     <nav class="view-tabs" role="tablist" aria-label="App views">
       <button type="button" class="view-tab active" data-view="dashboard" role="tab" aria-selected="true">Dashboard</button>
       <button type="button" class="view-tab" data-view="all" role="tab" aria-selected="false">All Tasks</button>
+      <button type="button" class="view-tab" data-view="review" role="tab" aria-selected="false">Weekly</button>
     </nav>
 
     <!-- Dashboard View -->
     <div id="dashboardView" class="view-panel">
+      <section class="briefing-card card" id="morningBriefing" aria-labelledby="briefingTitle">
+        <header class="briefing-header">
+          <div>
+            <p class="briefing-kicker">Morning briefing</p>
+            <h2 id="briefingTitle">Your day at a glance</h2>
+          </div>
+          <button type="button" class="btn btn-ghost briefing-dismiss" id="dismissBriefing" title="Hide for today">Hide</button>
+        </header>
+        <div class="briefing-grid">
+          <div class="briefing-block">
+            <h3>Top priorities</h3>
+            <ul id="briefingTop3" class="briefing-list"></ul>
+          </div>
+          <div class="briefing-block">
+            <h3>Scheduled today</h3>
+            <ul id="briefingSchedule" class="briefing-list"></ul>
+          </div>
+          <div class="briefing-block">
+            <h3>Quick wins</h3>
+            <ul id="briefingWins" class="briefing-list"></ul>
+          </div>
+        </div>
+        <p class="briefing-foot" id="briefingFoot"></p>
+      </section>
+
       <div class="sections-grid" id="sectionsGrid"></div>
 
       <section class="reflection-card card" aria-labelledby="reflectionTitle">
@@ -267,6 +301,12 @@
             <option value="shopping">Shopping</option>
             <option value="other">Other</option>
           </select>
+          <select id="recurInput" aria-label="Repeat">
+            <option value="none">No repeat</option>
+            <option value="daily">Every day</option>
+            <option value="weekdays">Weekdays</option>
+            <option value="weekly">Weekly</option>
+          </select>
           <button type="submit" class="btn btn-primary">Add task</button>
         </div>
       </form>
@@ -300,6 +340,33 @@
         <p class="empty-title">All clear!</p>
         <p class="empty-text">No tasks yet. Add something above to get started.</p>
       </div>
+    </div>
+
+    <!-- Weekly Review View -->
+    <div id="reviewView" class="view-panel" hidden>
+      <section class="review-card card">
+        <header class="review-header">
+          <div>
+            <p class="briefing-kicker">Last 7 days</p>
+            <h2>Weekly review</h2>
+            <p class="section-desc" id="reviewRange">Your progress this week</p>
+          </div>
+          <button type="button" class="btn btn-primary" id="refreshReview">Refresh</button>
+        </header>
+        <div class="review-stats" id="reviewStats"></div>
+        <div class="review-chart-wrap">
+          <h3>Completions by day</h3>
+          <div class="review-bars" id="reviewBars"></div>
+        </div>
+        <div class="review-mood-wrap">
+          <h3>Mood trend</h3>
+          <div class="review-mood" id="reviewMood"></div>
+        </div>
+        <div class="review-wins-wrap">
+          <h3>Wins &amp; highlights</h3>
+          <ul class="review-wins" id="reviewWins"></ul>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -359,6 +426,15 @@
               <option value="other">Other</option>
             </select>
           </label>
+          <label class="field">
+            <span>Repeat</span>
+            <select id="editRecur">
+              <option value="none">No repeat</option>
+              <option value="daily">Every day</option>
+              <option value="weekdays">Weekdays</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </label>
         </div>
         <label class="field" id="editResourceField" hidden>
           <span>Resource link</span>
@@ -383,5 +459,12 @@
 
   <script src="api.js"></script>
   <script src="app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+      });
+    }
+  </script>
 </body>
 </html>

@@ -106,4 +106,8 @@ const API = {
   importData(payload) {
     return this.request("/api/import", { method: "POST", body: JSON.stringify(payload) });
   },
+
+  weeklyInsights() {
+    return this.request("/api/insights/weekly");
+  },
 };

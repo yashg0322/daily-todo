@@ -66,6 +66,7 @@ const els = {
   endTimeInput: $("endTimeInput"),
   priorityInput: $("priorityInput"),
   categoryInput: $("categoryInput"),
+  recurInput: $("recurInput"),
   taskList: $("taskList"),
   emptyState: $("emptyState"),
   footer: $("footer"),
@@ -84,7 +85,21 @@ const els = {
   viewTabs: document.querySelectorAll(".view-tab"),
   dashboardView: $("dashboardView"),
   allTasksView: $("allTasksView"),
+  reviewView: $("reviewView"),
   sectionsGrid: $("sectionsGrid"),
+  morningBriefing: $("morningBriefing"),
+  briefingTop3: $("briefingTop3"),
+  briefingSchedule: $("briefingSchedule"),
+  briefingWins: $("briefingWins"),
+  briefingFoot: $("briefingFoot"),
+  dismissBriefing: $("dismissBriefing"),
+  reviewRange: $("reviewRange"),
+  reviewStats: $("reviewStats"),
+  reviewBars: $("reviewBars"),
+  reviewMood: $("reviewMood"),
+  reviewWins: $("reviewWins"),
+  refreshReview: $("refreshReview"),
+  installBtn: $("installBtn"),
   dailyIntention: $("dailyIntention"),
   moodPicker: $("moodPicker"),
   reflectWentWell: $("reflectWentWell"),
@@ -110,6 +125,7 @@ const els = {
   editTimeRow: $("editTimeRow"),
   editPriority: $("editPriority"),
   editCategory: $("editCategory"),
+  editRecur: $("editRecur"),
   editResource: $("editResource"),
   editResourceField: $("editResourceField"),
   editNotes: $("editNotes"),
@@ -141,6 +157,8 @@ let tasks = [];
 let prefs = { filter: "all", sort: "smart", category: "all", theme: "dark", view: "dashboard" };
 let reflections = {};
 let intentions = {};
+let weeklyData = null;
+let deferredInstallPrompt = null;
 let editingId = null;
 let undoState = null;
 let toastTimer = null;
@@ -149,6 +167,8 @@ let prefsSaveTimer = null;
 let intentionSaveTimer = null;
 
 const CIRCUMFERENCE = 2 * Math.PI * 15.5;
+const RECUR_LABELS = { none: "", daily: "Daily", weekdays: "Weekdays", weekly: "Weekly" };
+const BRIEFING_HIDE_KEY = "daily-todo-briefing-hide";
 
 function normalizeTask(task) {
   return {
@@ -164,7 +184,17 @@ function normalizeTask(task) {
     category: task.category || "personal",
     notes: task.notes || "",
     resourceUrl: task.resourceUrl || "",
+    recur: task.recur || "none",
+    parentId: task.parentId || null,
   };
+}
+
+function isRecurringTemplate(task) {
+  return Boolean(task.recur && task.recur !== "none" && !task.parentId);
+}
+
+function actionableTasks() {
+  return tasks.filter((t) => !isRecurringTemplate(t));
 }
 
 async function loadUserData() {
@@ -339,7 +369,7 @@ function getInitialTheme() {
 }
 
 function countActiveInSection(section) {
-  return tasks.filter((t) => t.section === section && !t.completed).length;
+  return actionableTasks().filter((t) => t.section === section && !t.completed).length;
 }
 
 function isTaskNow(task) {
@@ -461,7 +491,7 @@ function sortSectionTasks(list, section) {
 function getVisibleTasks() {
   const query = els.searchInput.value.trim();
   return sortTasks(
-    tasks.filter(
+    actionableTasks().filter(
       (t) =>
         matchesFilter(t) &&
         matchesSearch(t, query) &&
@@ -481,10 +511,11 @@ function getDueLabel(task) {
 }
 
 function updateProgress() {
-  const total = tasks.length;
-  const done = tasks.filter((t) => t.completed).length;
+  const list = actionableTasks();
+  const total = list.length;
+  const done = list.filter((t) => t.completed).length;
   const active = total - done;
-  const top3 = tasks.filter((t) => t.section === "top3");
+  const top3 = list.filter((t) => t.section === "top3");
   const top3Done = top3.filter((t) => t.completed).length;
   const percent = total === 0 ? 0 : Math.round((done / total) * 100);
 
@@ -523,7 +554,7 @@ async function addTask(data) {
     const created = await API.createTask({
       text: data.text.trim(),
       section: data.section || "inbox",
-      dueDate: data.dueDate || null,
+      dueDate: data.dueDate || (data.recur && data.recur !== "none" ? todayISO() : null),
       startTime: data.startTime || null,
       endTime: data.endTime || null,
       completed: false,
@@ -531,10 +562,16 @@ async function addTask(data) {
       category: data.category || "personal",
       notes: data.notes || "",
       resourceUrl: data.resourceUrl || "",
+      recur: data.recur || "none",
     });
-    tasks.unshift(normalizeTask(created));
+
+    if (data.recur && data.recur !== "none") {
+      await loadUserData();
+    } else {
+      tasks.unshift(normalizeTask(created));
+    }
     render();
-    showToast("Task added");
+    showToast(data.recur && data.recur !== "none" ? "Recurring task added" : "Task added");
     return true;
   } catch (err) {
     showToast(err.message || "Could not add task");
@@ -621,6 +658,11 @@ function openEditModal(id) {
   els.editEndTime.value = task.endTime || "";
   els.editPriority.value = task.priority;
   els.editCategory.value = task.category;
+  if (els.editRecur) {
+    els.editRecur.value = task.parentId
+      ? (tasks.find((t) => t.id === task.parentId)?.recur || "none")
+      : (task.recur || "none");
+  }
   els.editResource.value = task.resourceUrl || "";
   els.editNotes.value = task.notes || "";
   toggleTimeFields(task.section, els.editStartTime, els.editEndTime, els.editTimeRow);
@@ -654,11 +696,19 @@ async function saveEdit() {
     category: els.editCategory.value,
     resourceUrl: newSection === "learning" ? els.editResource.value.trim() : "",
     notes: els.editNotes.value.trim(),
+    recur: els.editRecur ? els.editRecur.value : "none",
   };
 
   try {
-    const saved = await API.updateTask(editingId, updated);
-    Object.assign(task, normalizeTask(saved));
+    const targetId = task.parentId || editingId;
+    const saved = await API.updateTask(targetId, updated);
+    if (task.parentId && targetId !== editingId) {
+      await API.updateTask(editingId, { ...updated, recur: "none" });
+      await loadUserData();
+    } else {
+      Object.assign(task, normalizeTask(saved));
+      if (updated.recur && updated.recur !== "none") await loadUserData();
+    }
     closeEditModal();
     render();
     showToast("Task updated");
@@ -700,7 +750,9 @@ function setView(view) {
   });
   els.dashboardView.hidden = view !== "dashboard";
   els.allTasksView.hidden = view !== "all";
+  if (els.reviewView) els.reviewView.hidden = view !== "review";
   render();
+  if (view === "review") loadWeeklyReview();
 }
 
 function renderSectionTask(task, index, section) {
@@ -757,6 +809,14 @@ function renderSectionTask(task, index, section) {
     meta.appendChild(link);
   }
 
+  if (task.parentId) {
+    const recurTag = document.createElement("span");
+    recurTag.className = "mini-tag";
+    const parent = tasks.find((t) => t.id === task.parentId);
+    recurTag.textContent = RECUR_LABELS[parent?.recur] || "Repeats";
+    meta.appendChild(recurTag);
+  }
+
   const due = getDueLabel(task);
   if (due) {
     const dueTag = document.createElement("span");
@@ -776,7 +836,7 @@ function renderSectionCard(key, config) {
   card.dataset.section = key;
 
   const sectionTasks = sortSectionTasks(
-    tasks.filter((t) => t.section === key),
+    actionableTasks().filter((t) => t.section === key),
     key
   );
   const activeCount = sectionTasks.filter((t) => !t.completed).length;
@@ -873,10 +933,154 @@ function renderSectionCard(key, config) {
 }
 
 function renderDashboard() {
+  renderMorningBriefing();
   els.sectionsGrid.innerHTML = "";
   Object.entries(SECTIONS).forEach(([key, config]) => {
     els.sectionsGrid.appendChild(renderSectionCard(key, config));
   });
+}
+
+function fillBriefingList(el, items, emptyText) {
+  if (!el) return;
+  el.innerHTML = "";
+  if (!items.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = emptyText;
+    el.appendChild(li);
+    return;
+  }
+  items.slice(0, 3).forEach((task) => {
+    const li = document.createElement("li");
+    if (task.completed) li.classList.add("done");
+    li.textContent = task.startTime
+      ? `${formatTime(task.startTime)}${task.endTime ? `–${formatTime(task.endTime)}` : ""} · ${task.text}`
+      : task.text;
+    el.appendChild(li);
+  });
+}
+
+function renderMorningBriefing() {
+  if (!els.morningBriefing) return;
+  const hiddenDay = localStorage.getItem(BRIEFING_HIDE_KEY);
+  if (hiddenDay === todayISO()) {
+    els.morningBriefing.hidden = true;
+    return;
+  }
+  els.morningBriefing.hidden = false;
+
+  const today = todayISO();
+  const list = actionableTasks();
+  const top3 = list.filter((t) => t.section === "top3");
+  const scheduled = list.filter(
+    (t) => t.section === "scheduled" && (t.dueDate === today || (!t.dueDate && t.startTime))
+  );
+  const wins = list.filter((t) => t.section === "quickwin" && !t.completed);
+
+  fillBriefingList(els.briefingTop3, top3, "Add up to 3 priorities for today");
+  fillBriefingList(els.briefingSchedule, sortSectionTasks(scheduled, "scheduled"), "Nothing scheduled yet");
+  fillBriefingList(els.briefingWins, wins, "Grab a quick win for momentum");
+
+  const openTop = top3.filter((t) => !t.completed).length;
+  const openSched = scheduled.filter((t) => !t.completed).length;
+  const intention = intentions[today];
+  els.briefingFoot.textContent = intention
+    ? `Intention: ${intention} · ${openTop} priorities · ${openSched} on calendar`
+    : `${openTop} priorities open · ${openSched} scheduled · set an intention above`;
+}
+
+async function loadWeeklyReview() {
+  if (!els.reviewStats) return;
+  els.reviewStats.innerHTML = "<p class='section-desc'>Loading weekly insights…</p>";
+  try {
+    weeklyData = await API.weeklyInsights();
+    renderWeeklyReview();
+  } catch {
+    els.reviewStats.innerHTML = "<p class='section-desc'>Could not load weekly review.</p>";
+  }
+}
+
+function renderWeeklyReview() {
+  if (!weeklyData || !els.reviewStats) return;
+  const d = weeklyData;
+  if (els.reviewRange) {
+    els.reviewRange.textContent = `${formatDate(d.range.start)} – ${formatDate(d.range.end)}`;
+  }
+
+  els.reviewStats.innerHTML = `
+    <div class="review-stat"><strong>${d.completedCount}</strong><span>Completed</span></div>
+    <div class="review-stat"><strong>${d.top3Completed}</strong><span>Top 3 done</span></div>
+    <div class="review-stat"><strong>${d.learningCompleted}</strong><span>Learning</span></div>
+    <div class="review-stat"><strong>${d.avgMood != null ? d.avgMood : "—"}</strong><span>Avg mood</span></div>
+  `;
+
+  const max = Math.max(1, ...Object.values(d.byDay || {}));
+  els.reviewBars.innerHTML = "";
+  Object.entries(d.byDay || {}).forEach(([day, count]) => {
+    const col = document.createElement("div");
+    col.className = "review-bar-col";
+    const bar = document.createElement("div");
+    bar.className = "review-bar";
+    bar.style.height = `${Math.max(6, (count / max) * 90)}px`;
+    const countEl = document.createElement("span");
+    countEl.className = "review-bar-count";
+    countEl.textContent = String(count);
+    const label = document.createElement("span");
+    label.className = "review-bar-label";
+    label.textContent = new Date(day + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" });
+    col.appendChild(countEl);
+    col.appendChild(bar);
+    col.appendChild(label);
+    els.reviewBars.appendChild(col);
+  });
+
+  els.reviewMood.innerHTML = "";
+  if (!d.moodSeries?.length) {
+    els.reviewMood.innerHTML = '<span class="section-desc">No mood check-ins yet this week.</span>';
+  } else {
+    d.moodSeries.forEach((m) => {
+      const mood = MOODS.find((x) => x.value === m.mood);
+      const chip = document.createElement("span");
+      chip.className = "mood-chip";
+      chip.textContent = `${mood ? mood.emoji : ""} ${formatDate(m.date)}`;
+      els.reviewMood.appendChild(chip);
+    });
+  }
+
+  els.reviewWins.innerHTML = "";
+  if (!d.wins?.length) {
+    els.reviewWins.innerHTML = '<li><span class="win-date">Keep going</span>Complete tasks and reflections to see highlights here.</li>';
+  } else {
+    d.wins.forEach((w) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="win-date">${formatDate(w.date)}</span>${w.text}`;
+      els.reviewWins.appendChild(li);
+    });
+  }
+}
+
+function setupPwaInstall() {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    if (els.installBtn) els.installBtn.hidden = false;
+  });
+
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    if (els.installBtn) els.installBtn.hidden = true;
+    showToast("App installed — open it from your home screen");
+  });
+
+  if (els.installBtn) {
+    els.installBtn.addEventListener("click", async () => {
+      if (!deferredInstallPrompt) return;
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      els.installBtn.hidden = true;
+    });
+  }
 }
 
 function renderMoodPicker() {
@@ -1001,6 +1205,16 @@ function renderTaskItem(task) {
   secTag.textContent = SECTIONS[task.section]?.title || task.section;
   meta.appendChild(secTag);
 
+  if (task.parentId || (task.recur && task.recur !== "none")) {
+    const recurTag = document.createElement("span");
+    recurTag.className = "tag tag-recur";
+    const label = task.parentId
+      ? RECUR_LABELS[tasks.find((t) => t.id === task.parentId)?.recur] || "Repeats"
+      : RECUR_LABELS[task.recur];
+    recurTag.textContent = label || "Repeats";
+    meta.appendChild(recurTag);
+  }
+
   const priorityTag = document.createElement("span");
   priorityTag.className = `tag tag-priority-${task.priority}`;
   priorityTag.textContent = task.priority;
@@ -1067,7 +1281,7 @@ function renderCategoryBar() {
   els.categoryBar.appendChild(allBtn);
 
   Object.entries(CATEGORIES).forEach(([key, label]) => {
-    const count = tasks.filter((t) => t.category === key && !t.completed).length;
+    const count = actionableTasks().filter((t) => t.category === key && !t.completed).length;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = `cat-pill${prefs.category === key ? " active" : ""}`;
@@ -1083,7 +1297,7 @@ function renderCategoryBar() {
 
 function renderAllTasks() {
   const visible = getVisibleTasks();
-  const doneCount = tasks.filter((t) => t.completed).length;
+  const doneCount = actionableTasks().filter((t) => t.completed).length;
 
   renderCategoryBar();
   els.taskList.innerHTML = "";
@@ -1108,6 +1322,8 @@ function render() {
   if (prefs.view === "dashboard") {
     renderDashboard();
     renderReflection();
+  } else if (prefs.view === "review") {
+    if (weeklyData) renderWeeklyReview();
   } else {
     renderAllTasks();
   }
@@ -1217,6 +1433,17 @@ if (els.authThemeToggle) {
 
 els.logoutBtn.addEventListener("click", logout);
 
+if (els.dismissBriefing) {
+  els.dismissBriefing.addEventListener("click", () => {
+    localStorage.setItem(BRIEFING_HIDE_KEY, todayISO());
+    els.morningBriefing.hidden = true;
+  });
+}
+
+if (els.refreshReview) {
+  els.refreshReview.addEventListener("click", () => loadWeeklyReview());
+}
+
 els.viewTabs.forEach((tab) => {
   tab.addEventListener("click", () => setView(tab.dataset.view));
 });
@@ -1267,6 +1494,7 @@ els.addForm.addEventListener("submit", async (e) => {
     endTime: els.endTimeInput.value || null,
     priority: els.priorityInput.value,
     category: els.categoryInput.value,
+    recur: els.recurInput ? els.recurInput.value : "none",
   });
 
   if (ok) {
@@ -1274,6 +1502,7 @@ els.addForm.addEventListener("submit", async (e) => {
     els.dueDateInput.value = "";
     els.startTimeInput.value = "";
     els.endTimeInput.value = "";
+    if (els.recurInput) els.recurInput.value = "none";
     els.sectionInput.value = "inbox";
     toggleTimeFields("inbox", els.startTimeInput, els.endTimeInput);
     els.taskInput.focus();
@@ -1360,6 +1589,7 @@ document.addEventListener("keydown", (e) => {
 async function initApp() {
   applyTheme(localStorage.getItem(GUEST_THEME_KEY) || "dark");
   setAuthTab("login");
+  setupPwaInstall();
 
   if (!API.getToken()) {
     showAuth();

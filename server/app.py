@@ -34,6 +34,7 @@ def get_db():
         g.db = sqlite3.connect(DB_PATH)
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
+        ensure_schema(g.db)
     return g.db
 
 
@@ -44,9 +45,7 @@ def close_db(_exc):
         db.close()
 
 
-def init_db():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH)
+def ensure_schema(db):
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -70,6 +69,8 @@ def init_db():
             notes TEXT NOT NULL DEFAULT '',
             resource_url TEXT NOT NULL DEFAULT '',
             created_at INTEGER NOT NULL,
+            recur TEXT NOT NULL DEFAULT 'none',
+            parent_id TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id);
@@ -97,11 +98,28 @@ def init_db():
         );
         """
     )
+    cols = {r[1] for r in db.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "recur" not in cols:
+        db.execute("ALTER TABLE tasks ADD COLUMN recur TEXT NOT NULL DEFAULT 'none'")
+    if "parent_id" not in cols:
+        db.execute("ALTER TABLE tasks ADD COLUMN parent_id TEXT")
     db.commit()
+
+
+def init_db():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    ensure_schema(db)
     db.close()
 
 
+def today_iso():
+    return datetime.now(timezone.utc).astimezone().date().isoformat()
+
+
 def row_to_task(row):
+    keys = row.keys()
     return {
         "id": row["id"],
         "text": row["text"],
@@ -115,7 +133,90 @@ def row_to_task(row):
         "notes": row["notes"],
         "resourceUrl": row["resource_url"],
         "createdAt": row["created_at"],
+        "recur": row["recur"] if "recur" in keys else "none",
+        "parentId": row["parent_id"] if "parent_id" in keys else None,
     }
+
+
+def should_generate_today(recur, today):
+    if not recur or recur == "none":
+        return False
+    weekday = today.weekday()  # Mon=0
+    if recur == "daily":
+        return True
+    if recur == "weekdays":
+        return weekday < 5
+    if recur == "weekly":
+        return True
+    return False
+
+
+def generate_recurring_for_user(db, user_id):
+    """Create today's instance for each recurring template if missing."""
+    today = datetime.now(timezone.utc).astimezone().date()
+    today_str = today.isoformat()
+    templates = db.execute(
+        """
+        SELECT * FROM tasks
+        WHERE user_id = ? AND recur IS NOT NULL AND recur != 'none' AND parent_id IS NULL
+        """,
+        (user_id,),
+    ).fetchall()
+
+    created = 0
+    for t in templates:
+        if not should_generate_today(t["recur"], today):
+            continue
+        if t["recur"] == "weekly":
+            # Generate only on the weekday of the template due date (or created day)
+            anchor = t["due_date"] or today_str
+            try:
+                anchor_weekday = datetime.fromisoformat(anchor).weekday()
+            except ValueError:
+                anchor_weekday = today.weekday()
+            if today.weekday() != anchor_weekday:
+                continue
+
+        exists = db.execute(
+            """
+            SELECT id FROM tasks
+            WHERE user_id = ? AND parent_id = ? AND due_date = ?
+            LIMIT 1
+            """,
+            (user_id, t["id"], today_str),
+        ).fetchone()
+        if exists:
+            continue
+
+        db.execute(
+            """
+            INSERT INTO tasks (
+                id, user_id, text, section, due_date, start_time, end_time,
+                completed, priority, category, notes, resource_url, created_at,
+                recur, parent_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'none', ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                user_id,
+                t["text"],
+                t["section"],
+                today_str,
+                t["start_time"],
+                t["end_time"],
+                t["priority"],
+                t["category"],
+                t["notes"],
+                t["resource_url"],
+                int(datetime.now(timezone.utc).timestamp() * 1000),
+                t["id"],
+            ),
+        )
+        created += 1
+
+    if created:
+        db.commit()
+    return created
 
 
 def sign_token(user_id, email):
@@ -234,6 +335,7 @@ def me():
 def bootstrap():
     db = get_db()
     uid = g.user_id
+    generate_recurring_for_user(db, uid)
 
     tasks = [
         row_to_task(r)
@@ -269,6 +371,77 @@ def bootstrap():
     )
 
 
+@app.get("/api/insights/weekly")
+@auth_required
+def weekly_insights():
+    db = get_db()
+    uid = g.user_id
+    today = datetime.now(timezone.utc).astimezone().date()
+    start = today - timedelta(days=6)
+    start_str = start.isoformat()
+    today_str = today.isoformat()
+
+    tasks = db.execute(
+        "SELECT * FROM tasks WHERE user_id = ?", (uid,)
+    ).fetchall()
+
+    completed = []
+    for t in tasks:
+        if not t["completed"]:
+            continue
+        # Prefer due_date as completion day proxy; fall back to created
+        day = t["due_date"]
+        if not day:
+            day = datetime.fromtimestamp(t["created_at"] / 1000, tz=timezone.utc).astimezone().date().isoformat()
+        if start_str <= day <= today_str:
+            completed.append({**row_to_task(t), "_day": day})
+
+    by_day = { (start + timedelta(days=i)).isoformat(): 0 for i in range(7) }
+    by_section = {}
+    wins = []
+    for t in completed:
+        day = t["_day"]
+        if day in by_day:
+            by_day[day] += 1
+        by_section[t["section"]] = by_section.get(t["section"], 0) + 1
+        if t["section"] == "top3" or t.get("notes"):
+            wins.append({"text": t["text"], "section": t["section"], "day": day})
+
+    reflections = db.execute(
+        "SELECT * FROM reflections WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date",
+        (uid, start_str, today_str),
+    ).fetchall()
+    mood_series = []
+    mood_sum = 0
+    mood_count = 0
+    reflection_wins = []
+    for r in reflections:
+        if r["mood"]:
+            mood_series.append({"date": r["date"], "mood": r["mood"]})
+            mood_sum += r["mood"]
+            mood_count += 1
+        if r["went_well"]:
+            reflection_wins.append({"date": r["date"], "text": r["went_well"]})
+
+    top3_done = sum(1 for t in completed if t["section"] == "top3")
+    learning_done = sum(1 for t in completed if t["section"] == "learning")
+
+    return jsonify(
+        {
+            "range": {"start": start_str, "end": today_str},
+            "completedCount": len(completed),
+            "byDay": by_day,
+            "bySection": by_section,
+            "top3Completed": top3_done,
+            "learningCompleted": learning_done,
+            "avgMood": round(mood_sum / mood_count, 1) if mood_count else None,
+            "moodSeries": mood_series,
+            "reflectionDays": len(reflections),
+            "wins": (reflection_wins + [{"date": w["day"], "text": w["text"]} for w in wins])[:8],
+        }
+    )
+
+
 @app.put("/api/prefs")
 @auth_required
 def save_prefs():
@@ -295,14 +468,18 @@ def create_task():
 
     task_id = task.get("id") or str(uuid.uuid4())
     created = task.get("createdAt") or int(datetime.now(timezone.utc).timestamp() * 1000)
+    recur = task.get("recur") or "none"
+    if recur not in ("none", "daily", "weekly", "weekdays"):
+        recur = "none"
 
     db = get_db()
     db.execute(
         """
         INSERT INTO tasks (
             id, user_id, text, section, due_date, start_time, end_time,
-            completed, priority, category, notes, resource_url, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            completed, priority, category, notes, resource_url, created_at,
+            recur, parent_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             task_id,
@@ -318,9 +495,13 @@ def create_task():
             task.get("notes") or "",
             task.get("resourceUrl") or "",
             created,
+            recur,
+            task.get("parentId"),
         ),
     )
     db.commit()
+    if recur != "none":
+        generate_recurring_for_user(db, g.user_id)
 
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     return jsonify(row_to_task(row)), 201
@@ -337,11 +518,16 @@ def update_task(task_id):
         return jsonify({"error": "Task not found"}), 404
 
     task = request.get_json(silent=True) or {}
+    recur = task.get("recur", existing["recur"] if "recur" in existing.keys() else "none")
+    if recur not in ("none", "daily", "weekly", "weekdays"):
+        recur = "none"
+
     db.execute(
         """
         UPDATE tasks SET
             text = ?, section = ?, due_date = ?, start_time = ?, end_time = ?,
-            completed = ?, priority = ?, category = ?, notes = ?, resource_url = ?
+            completed = ?, priority = ?, category = ?, notes = ?, resource_url = ?,
+            recur = ?
         WHERE id = ? AND user_id = ?
         """,
         (
@@ -355,6 +541,7 @@ def update_task(task_id):
             task.get("category", existing["category"]),
             task.get("notes", existing["notes"]),
             task.get("resourceUrl", existing["resource_url"]),
+            recur,
             task_id,
             g.user_id,
         ),
@@ -362,7 +549,6 @@ def update_task(task_id):
     db.commit()
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     return jsonify(row_to_task(row))
-
 
 @app.delete("/api/tasks/<task_id>")
 @auth_required
@@ -455,8 +641,9 @@ def import_data():
             """
             INSERT OR REPLACE INTO tasks (
                 id, user_id, text, section, due_date, start_time, end_time,
-                completed, priority, category, notes, resource_url, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                completed, priority, category, notes, resource_url, created_at,
+                recur, parent_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -472,6 +659,8 @@ def import_data():
                 t.get("notes") or "",
                 t.get("resourceUrl") or "",
                 t.get("createdAt") or int(datetime.now(timezone.utc).timestamp() * 1000),
+                t.get("recur") or "none",
+                t.get("parentId"),
             ),
         )
 
