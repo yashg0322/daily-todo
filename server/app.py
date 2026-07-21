@@ -13,12 +13,13 @@ import jwt
 from dotenv import load_dotenv
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 
 load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / "public"
-DATA_DIR = ROOT / "data"
+DATA_DIR = Path(os.getenv("DATA_DIR", str(ROOT / "data")))
 DB_PATH = DATA_DIR / "daily-todo.db"
 
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-in-production")
@@ -100,7 +101,7 @@ def ensure_schema(db):
     )
     cols = {r[1] for r in db.execute("PRAGMA table_info(tasks)").fetchall()}
     if "recur" not in cols:
-        db.execute("ALTER TABLE tasks ADD COLUMN recur TEXT NOT NULL DEFAULT 'none'")
+        db.execute("ALTER TABLE tasks ADD COLUMN recur TEXT DEFAULT 'none'")
     if "parent_id" not in cols:
         db.execute("ALTER TABLE tasks ADD COLUMN parent_id TEXT")
     db.commit()
@@ -118,8 +119,15 @@ def today_iso():
     return datetime.now(timezone.utc).astimezone().date().isoformat()
 
 
+def _col(row, name, default=None):
+    try:
+        val = row[name]
+        return default if val is None and default is not None else val
+    except (IndexError, KeyError):
+        return default
+
+
 def row_to_task(row):
-    keys = row.keys()
     return {
         "id": row["id"],
         "text": row["text"],
@@ -130,11 +138,11 @@ def row_to_task(row):
         "completed": bool(row["completed"]),
         "priority": row["priority"],
         "category": row["category"],
-        "notes": row["notes"],
-        "resourceUrl": row["resource_url"],
+        "notes": _col(row, "notes", "") or "",
+        "resourceUrl": _col(row, "resource_url", "") or "",
         "createdAt": row["created_at"],
-        "recur": row["recur"] if "recur" in keys else "none",
-        "parentId": row["parent_id"] if "parent_id" in keys else None,
+        "recur": _col(row, "recur", "none") or "none",
+        "parentId": _col(row, "parent_id", None),
     }
 
 
@@ -153,71 +161,78 @@ def should_generate_today(recur, today):
 
 def generate_recurring_for_user(db, user_id):
     """Create today's instance for each recurring template if missing."""
-    today = datetime.now(timezone.utc).astimezone().date()
-    today_str = today.isoformat()
-    templates = db.execute(
-        """
-        SELECT * FROM tasks
-        WHERE user_id = ? AND recur IS NOT NULL AND recur != 'none' AND parent_id IS NULL
-        """,
-        (user_id,),
-    ).fetchall()
+    try:
+        today = datetime.now(timezone.utc).astimezone().date()
+        today_str = today.isoformat()
+        templates = db.execute(
+            """
+            SELECT * FROM tasks
+            WHERE user_id = ? AND IFNULL(recur, 'none') != 'none' AND parent_id IS NULL
+            """,
+            (user_id,),
+        ).fetchall()
 
-    created = 0
-    for t in templates:
-        if not should_generate_today(t["recur"], today):
-            continue
-        if t["recur"] == "weekly":
-            # Generate only on the weekday of the template due date (or created day)
-            anchor = t["due_date"] or today_str
-            try:
-                anchor_weekday = datetime.fromisoformat(anchor).weekday()
-            except ValueError:
-                anchor_weekday = today.weekday()
-            if today.weekday() != anchor_weekday:
+        created = 0
+        for t in templates:
+            recur = _col(t, "recur", "none") or "none"
+            if not should_generate_today(recur, today):
+                continue
+            if recur == "weekly":
+                anchor = _col(t, "due_date", None) or today_str
+                try:
+                    anchor_weekday = datetime.fromisoformat(str(anchor)[:10]).weekday()
+                except ValueError:
+                    anchor_weekday = today.weekday()
+                if today.weekday() != anchor_weekday:
+                    continue
+
+            exists = db.execute(
+                """
+                SELECT id FROM tasks
+                WHERE user_id = ? AND parent_id = ? AND due_date = ?
+                LIMIT 1
+                """,
+                (user_id, t["id"], today_str),
+            ).fetchone()
+            if exists:
                 continue
 
-        exists = db.execute(
-            """
-            SELECT id FROM tasks
-            WHERE user_id = ? AND parent_id = ? AND due_date = ?
-            LIMIT 1
-            """,
-            (user_id, t["id"], today_str),
-        ).fetchone()
-        if exists:
-            continue
+            db.execute(
+                """
+                INSERT INTO tasks (
+                    id, user_id, text, section, due_date, start_time, end_time,
+                    completed, priority, category, notes, resource_url, created_at,
+                    recur, parent_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'none', ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    user_id,
+                    t["text"],
+                    t["section"],
+                    today_str,
+                    t["start_time"],
+                    t["end_time"],
+                    t["priority"],
+                    t["category"],
+                    _col(t, "notes", "") or "",
+                    _col(t, "resource_url", "") or "",
+                    int(datetime.now(timezone.utc).timestamp() * 1000),
+                    t["id"],
+                ),
+            )
+            created += 1
 
-        db.execute(
-            """
-            INSERT INTO tasks (
-                id, user_id, text, section, due_date, start_time, end_time,
-                completed, priority, category, notes, resource_url, created_at,
-                recur, parent_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'none', ?)
-            """,
-            (
-                str(uuid.uuid4()),
-                user_id,
-                t["text"],
-                t["section"],
-                today_str,
-                t["start_time"],
-                t["end_time"],
-                t["priority"],
-                t["category"],
-                t["notes"],
-                t["resource_url"],
-                int(datetime.now(timezone.utc).timestamp() * 1000),
-                t["id"],
-            ),
-        )
-        created += 1
-
-    if created:
-        db.commit()
-    return created
-
+        if created:
+            db.commit()
+        return created
+    except Exception as exc:
+        print(f"generate_recurring_for_user failed: {exc}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return 0
 
 def sign_token(user_id, email):
     exp = datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRES_DAYS)
@@ -472,38 +487,58 @@ def create_task():
     if recur not in ("none", "daily", "weekly", "weekdays"):
         recur = "none"
 
-    db = get_db()
-    db.execute(
-        """
-        INSERT INTO tasks (
-            id, user_id, text, section, due_date, start_time, end_time,
-            completed, priority, category, notes, resource_url, created_at,
-            recur, parent_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            task_id,
-            g.user_id,
-            text,
-            task.get("section") or "inbox",
-            task.get("dueDate"),
-            task.get("startTime"),
-            task.get("endTime"),
-            1 if task.get("completed") else 0,
-            task.get("priority") or "medium",
-            task.get("category") or "personal",
-            task.get("notes") or "",
-            task.get("resourceUrl") or "",
-            created,
-            recur,
-            task.get("parentId"),
-        ),
+    values = (
+        task_id,
+        g.user_id,
+        text,
+        task.get("section") or "inbox",
+        task.get("dueDate"),
+        task.get("startTime"),
+        task.get("endTime"),
+        1 if task.get("completed") else 0,
+        task.get("priority") or "medium",
+        task.get("category") or "personal",
+        task.get("notes") or "",
+        task.get("resourceUrl") or "",
+        created,
+        recur,
+        task.get("parentId"),
     )
+
+    db = get_db()
+    try:
+        db.execute(
+            """
+            INSERT INTO tasks (
+                id, user_id, text, section, due_date, start_time, end_time,
+                completed, priority, category, notes, resource_url, created_at,
+                recur, parent_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            values,
+        )
+    except sqlite3.OperationalError as exc:
+        # Recover from older DBs missing columns
+        print(f"create_task schema recovery: {exc}")
+        ensure_schema(db)
+        db.execute(
+            """
+            INSERT INTO tasks (
+                id, user_id, text, section, due_date, start_time, end_time,
+                completed, priority, category, notes, resource_url, created_at,
+                recur, parent_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            values,
+        )
+
     db.commit()
     if recur != "none":
         generate_recurring_for_user(db, g.user_id)
 
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Task was created but could not be loaded"}), 500
     return jsonify(row_to_task(row)), 201
 
 
@@ -709,6 +744,25 @@ def not_found(_e):
         return jsonify({"error": "Not found"}), 404
     return send_from_directory(PUBLIC, "index.html")
 
+
+@app.errorhandler(500)
+def server_error(err):
+    print(f"500 error on {request.path}: {err}")
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Something went wrong. Please try again."}), 500
+    return jsonify({"error": "Internal server error"}), 500
+
+
+@app.errorhandler(Exception)
+def unhandled_exception(err):
+    if isinstance(err, HTTPException):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": err.description or err.name}), err.code
+        return err
+    print(f"Unhandled error on {request.path}: {err}")
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Something went wrong. Please try again."}), 500
+    raise err
 
 if __name__ == "__main__":
     init_db()

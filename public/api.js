@@ -38,7 +38,12 @@ const API = {
       try {
         data = JSON.parse(text);
       } catch {
-        data = { error: text };
+        const clean = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        data = {
+          error: clean.includes("Internal Server Error")
+            ? "Server error — please try again in a moment"
+            : clean.slice(0, 160) || `Request failed (${res.status})`,
+        };
       }
     }
 
