@@ -50,6 +50,16 @@ const API = {
     if (!res.ok) {
       const err = new Error(data?.error || `Request failed (${res.status})`);
       err.status = res.status;
+      if (res.status === 401 && !path.includes("/api/auth/")) {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        err.message = "Session expired — please sign in again";
+        setTimeout(() => {
+          if (!window.location.hash.includes("reauth")) {
+            window.location.reload();
+          }
+        }, 800);
+      }
       throw err;
     }
 

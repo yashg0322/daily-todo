@@ -553,34 +553,52 @@ def update_task(task_id):
         return jsonify({"error": "Task not found"}), 404
 
     task = request.get_json(silent=True) or {}
-    recur = task.get("recur", existing["recur"] if "recur" in existing.keys() else "none")
+    recur = task.get("recur", _col(existing, "recur", "none") or "none")
     if recur not in ("none", "daily", "weekly", "weekdays"):
         recur = "none"
 
-    db.execute(
-        """
-        UPDATE tasks SET
-            text = ?, section = ?, due_date = ?, start_time = ?, end_time = ?,
-            completed = ?, priority = ?, category = ?, notes = ?, resource_url = ?,
-            recur = ?
-        WHERE id = ? AND user_id = ?
-        """,
-        (
-            (task.get("text") or existing["text"]).strip(),
-            task.get("section", existing["section"]),
-            task.get("dueDate") if "dueDate" in task else existing["due_date"],
-            task.get("startTime") if "startTime" in task else existing["start_time"],
-            task.get("endTime") if "endTime" in task else existing["end_time"],
-            1 if task.get("completed", existing["completed"]) else 0,
-            task.get("priority", existing["priority"]),
-            task.get("category", existing["category"]),
-            task.get("notes", existing["notes"]),
-            task.get("resourceUrl", existing["resource_url"]),
-            recur,
-            task_id,
-            g.user_id,
-        ),
+    completed_val = task["completed"] if "completed" in task else bool(existing["completed"])
+    values = (
+        (task.get("text") or existing["text"]).strip(),
+        task.get("section", existing["section"]),
+        task.get("dueDate") if "dueDate" in task else existing["due_date"],
+        task.get("startTime") if "startTime" in task else existing["start_time"],
+        task.get("endTime") if "endTime" in task else existing["end_time"],
+        1 if completed_val else 0,
+        task.get("priority", existing["priority"]),
+        task.get("category", existing["category"]),
+        task.get("notes", _col(existing, "notes", "") or ""),
+        task.get("resourceUrl", _col(existing, "resource_url", "") or ""),
+        recur,
+        task_id,
+        g.user_id,
     )
+
+    try:
+        db.execute(
+            """
+            UPDATE tasks SET
+                text = ?, section = ?, due_date = ?, start_time = ?, end_time = ?,
+                completed = ?, priority = ?, category = ?, notes = ?, resource_url = ?,
+                recur = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            values,
+        )
+    except sqlite3.OperationalError as exc:
+        print(f"update_task schema recovery: {exc}")
+        ensure_schema(db)
+        db.execute(
+            """
+            UPDATE tasks SET
+                text = ?, section = ?, due_date = ?, start_time = ?, end_time = ?,
+                completed = ?, priority = ?, category = ?, notes = ?, resource_url = ?,
+                recur = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            values,
+        )
+
     db.commit()
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     return jsonify(row_to_task(row))
