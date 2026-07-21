@@ -1,4 +1,4 @@
-const CACHE = "daily-planner-v3";
+const CACHE = "daily-planner-v4";
 const ASSETS = [
   "/",
   "/index.html",
@@ -41,18 +41,16 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // Network-first so deploys are not stuck behind an old cache
   event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
-        .then((response) => {
-          if (response.ok && url.origin === self.location.origin) {
-            const clone = response.clone();
-            caches.open(CACHE).then((cache) => cache.put(request, clone));
-          }
-          return response;
-        })
-        .catch(() => cached);
-      return cached || network;
-    })
+    fetch(request)
+      .then((response) => {
+        if (response.ok && url.origin === self.location.origin) {
+          const clone = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(request, clone));
+        }
+        return response;
+      })
+      .catch(() => caches.match(request))
   );
 });

@@ -100,10 +100,22 @@ def ensure_schema(db):
         """
     )
     cols = {r[1] for r in db.execute("PRAGMA table_info(tasks)").fetchall()}
-    if "recur" not in cols:
-        db.execute("ALTER TABLE tasks ADD COLUMN recur TEXT DEFAULT 'none'")
-    if "parent_id" not in cols:
-        db.execute("ALTER TABLE tasks ADD COLUMN parent_id TEXT")
+    for name, ddl in (
+        ("notes", "ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''"),
+        ("resource_url", "ALTER TABLE tasks ADD COLUMN resource_url TEXT DEFAULT ''"),
+        ("recur", "ALTER TABLE tasks ADD COLUMN recur TEXT DEFAULT 'none'"),
+        ("parent_id", "ALTER TABLE tasks ADD COLUMN parent_id TEXT"),
+        ("section", "ALTER TABLE tasks ADD COLUMN section TEXT DEFAULT 'inbox'"),
+        ("due_date", "ALTER TABLE tasks ADD COLUMN due_date TEXT"),
+        ("start_time", "ALTER TABLE tasks ADD COLUMN start_time TEXT"),
+        ("end_time", "ALTER TABLE tasks ADD COLUMN end_time TEXT"),
+        ("completed", "ALTER TABLE tasks ADD COLUMN completed INTEGER DEFAULT 0"),
+        ("priority", "ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'medium'"),
+        ("category", "ALTER TABLE tasks ADD COLUMN category TEXT DEFAULT 'personal'"),
+        ("created_at", "ALTER TABLE tasks ADD COLUMN created_at INTEGER DEFAULT 0"),
+    ):
+        if name not in cols:
+            db.execute(ddl)
     db.commit()
 
 
@@ -255,6 +267,13 @@ def auth_required(f):
             g.user_id = payload["sub"]
         except jwt.PyJWTError:
             return jsonify({"error": "Invalid or expired token"}), 401
+
+        # Render free disk can wipe the DB while JWTs remain in browsers
+        db = get_db()
+        user = db.execute("SELECT id FROM users WHERE id = ?", (g.user_id,)).fetchone()
+        if not user:
+            return jsonify({"error": "Invalid or expired token"}), 401
+
         return f(*args, **kwargs)
 
     return wrapper
@@ -407,7 +426,17 @@ def weekly_insights():
         # Prefer due_date as completion day proxy; fall back to created
         day = t["due_date"]
         if not day:
-            day = datetime.fromtimestamp(t["created_at"] / 1000, tz=timezone.utc).astimezone().date().isoformat()
+            created = t["created_at"] or 0
+            try:
+                day = (
+                    datetime.fromtimestamp(int(created) / 1000, tz=timezone.utc)
+                    .astimezone()
+                    .date()
+                    .isoformat()
+                )
+            except (OSError, OverflowError, ValueError, TypeError):
+                continue
+        day = str(day)[:10]
         if start_str <= day <= today_str:
             completed.append({**row_to_task(t), "_day": day})
 
@@ -518,8 +547,12 @@ def create_task():
             values,
         )
     except sqlite3.OperationalError as exc:
-        # Recover from older DBs missing columns
+        # Recover from older DBs missing columns (must rollback first)
         print(f"create_task schema recovery: {exc}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
         ensure_schema(db)
         db.execute(
             """
@@ -587,6 +620,10 @@ def update_task(task_id):
         )
     except sqlite3.OperationalError as exc:
         print(f"update_task schema recovery: {exc}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
         ensure_schema(db)
         db.execute(
             """
@@ -767,7 +804,10 @@ def not_found(_e):
 def server_error(err):
     print(f"500 error on {request.path}: {err}")
     if request.path.startswith("/api/"):
-        return jsonify({"error": "Something went wrong. Please try again."}), 500
+        detail = getattr(err, "original_exception", None) or err
+        return jsonify({
+            "error": f"Server error: {type(detail).__name__}: {detail}"
+        }), 500
     return jsonify({"error": "Internal server error"}), 500
 
 
@@ -779,7 +819,9 @@ def unhandled_exception(err):
         return err
     print(f"Unhandled error on {request.path}: {err}")
     if request.path.startswith("/api/"):
-        return jsonify({"error": "Something went wrong. Please try again."}), 500
+        return jsonify({
+            "error": f"Server error: {type(err).__name__}: {err}"
+        }), 500
     raise err
 
 if __name__ == "__main__":
